@@ -16,18 +16,20 @@ koll.zsh: keyvez ollama for zsh
 
 <img src="demo.svg" alt="Kollzsh Demo" width="600">
 
-An [`oh-my-zsh`](https://ohmyz.sh) plugin that integrates the OLLAMA AI model 
-with [fzf](https://github.com/junegunn/fzf) to provide intelligent command 
+An [`oh-my-zsh`](https://ohmyz.sh) plugin that integrates the OLLAMA AI model
+with [fzf](https://github.com/junegunn/fzf) to provide intelligent command
 suggestions based on user input requirements.
 
 ## Features
 
-* **Intelligent Command Suggestions**: Use OLLAMA or MLX to generate relevant MacOS
+* **Intelligent Command Suggestions**: Use OLLAMA, MLX, or llama.cpp to generate relevant
   terminal commands based on your query or input requirement.
 * **FZF Integration**: Interactively select suggested commands using FZF's fuzzy
   finder, ensuring you find the right command for your task.
 * **MLX Support**: Run models locally on Apple Silicon using MLX framework for
   faster inference without a server.
+* **llama.cpp Support**: Run GGUF models locally using llama.cpp for cross-platform
+  local inference.
 * **Thinking Mode**: Use Ctrl-t to run queries in thinking mode (MLX only) for
   more complex reasoning tasks.
 * **Customizable**: Configure default shortcut, model, platform, and response number
@@ -49,20 +51,43 @@ suggestions based on user input requirements.
 
 Dependencies (`mlx-lm`, `transformers`) are automatically managed by `uv` at runtime.
 
+### For llama.cpp
+* `jq` for parsing JSON responses
+* `fzf` for interactive selection of commands
+* `curl` for making API requests
+* `python3` with `httpx` package
+* llama.cpp installation with `llama-server` binary
+* A GGUF model file
+
+### For vLLM
+* `jq` for parsing JSON responses
+* `fzf` for interactive selection of commands
+* `curl` for making API requests
+* `python3` with `httpx` package
+* vLLM installed (`pip install vllm`)
+* NVIDIA GPU with CUDA support
+
 ## Configuration Variables
 
 The following environment variables can be set to customize the behavior:
 
-| Variable Name             | Description                                        | Default Value              |
-|---------------------------|---------------------------------------------------|----------------------------|
-| `KOLLZSH_PLATFORM`        | Platform to use (`ollama` or `MLX`)               | `ollama`                   |
-| `KOLLZSH_MODEL`           | Model to use for command generation               | `qwen2.5-coder:3b`         |
-| `KOLLZSH_HOTKEY`          | Default shortcut key for triggering the plugin    | `^o` (Ctrl-o)              |
-| `KOLLZSH_THINKING_HOTKEY` | Shortcut key for thinking mode (MLX only)         | `^t` (Ctrl-t)              |
-| `KOLLZSH_COMMAND_COUNT`   | Number of command suggestions displayed           | `5`                        |
-| `KOLLZSH_URL`             | API endpoint URL (Ollama only)                    | `http://localhost:11434`   |
-| `KOLLZSH_API_KEY`         | API key for external APIs (DeepSeek/OpenAI)       | None                       |
-| `KOLLZSH_MAX_TOKENS`      | Maximum tokens for MLX response                   | `1024`                     |
+| Variable Name               | Description                                        | Default Value              |
+|-----------------------------|---------------------------------------------------|----------------------------|
+| `KOLLZSH_PLATFORM`          | Platform to use (`ollama`, `MLX`, `llamacpp`, or `vllm`) | `ollama`              |
+| `KOLLZSH_MODEL`             | Model to use for command generation               | `qwen2.5-coder:3b`         |
+| `KOLLZSH_HOTKEY`            | Default shortcut key for triggering the plugin    | `^o` (Ctrl-o)              |
+| `KOLLZSH_THINKING_HOTKEY`   | Shortcut key for thinking mode (MLX only)         | `^t` (Ctrl-t)              |
+| `KOLLZSH_COMMAND_COUNT`     | Number of command suggestions displayed           | `5`                        |
+| `KOLLZSH_URL`               | API endpoint URL (Ollama only)                    | `http://localhost:11434`   |
+| `KOLLZSH_API_KEY`           | API key for external APIs (DeepSeek/OpenAI)       | None                       |
+| `KOLLZSH_MAX_TOKENS`        | Maximum tokens for MLX response                   | `1024`                     |
+| `KOLLZSH_LLAMACPP_PATH`     | Path to llama.cpp installation directory          | None                       |
+| `KOLLZSH_LLAMACPP_MODEL`    | Path to GGUF model file for llama.cpp             | None                       |
+| `KOLLZSH_LLAMACPP_SERVER_URL` | llama.cpp server URL                            | `http://localhost:8080`    |
+| `KOLLZSH_LLAMACPP_N_CTX`    | Context size for llama.cpp                        | `2048`                     |
+| `KOLLZSH_LLAMACPP_N_GPU_LAYERS` | GPU layers for llama.cpp (-1 for all)         | `-1`                       |
+| `KOLLZSH_VLLM_SERVER_URL`   | vLLM server URL                                   | `http://localhost:8000`    |
+| `KOLLZSH_VLLM_MODEL`        | Model name for vLLM                               | None (auto-detect)         |
 
 ### Example: DeepSeek API Configuration
 
@@ -120,6 +145,102 @@ export KOLLZSH_MAX_TOKENS="2048"
 When using MLX platform, press Ctrl-t to run your query in thinking mode. This
 enables the model's internal reasoning (using `<think>` tags) for more complex
 tasks. The thinking process and response will be displayed in the terminal.
+
+### Example: llama.cpp Configuration
+
+llama.cpp supports two modes: **CLI mode** (runs llama-cli directly) and **server mode**
+(connects to llama-server). CLI mode is used automatically when no server is running.
+
+| Variable Name               | Value                                    |
+|-----------------------------|------------------------------------------|
+| `KOLLZSH_PLATFORM`          | `llamacpp`                               |
+| `KOLLZSH_LLAMACPP_PATH`     | `/path/to/llama.cpp`                     |
+| `KOLLZSH_LLAMACPP_MODEL`    | `/path/to/model.gguf`                    |
+
+**CLI Mode (recommended for simplicity):**
+
+```bash
+# Configure llama.cpp platform with CLI mode
+export KOLLZSH_PLATFORM="llamacpp"
+export KOLLZSH_LLAMACPP_PATH="/home/user/llama.cpp"
+export KOLLZSH_LLAMACPP_MODEL="/home/user/models/qwen2.5-coder-3b-q4_k_m.gguf"
+
+# Optional: customize inference settings
+export KOLLZSH_LLAMACPP_N_CTX="4096"
+export KOLLZSH_LLAMACPP_N_GPU_LAYERS="-1"  # -1 for all layers on GPU
+```
+
+With CLI mode, llama-cli runs directly each time you press Ctrl-o. No server needed!
+
+**Server Mode (for faster repeated queries):**
+
+If you have llama-server running, it will be used automatically for faster responses:
+
+```bash
+# Start server manually
+llama-server -m /path/to/model.gguf -c 2048 -ngl -1 --port 8080
+
+# Or use the helper function
+kollzsh-start-llamacpp
+```
+
+```bash
+# If you only have a server running (no CLI), just set the URL
+export KOLLZSH_PLATFORM="llamacpp"
+export KOLLZSH_LLAMACPP_SERVER_URL="http://localhost:8080"
+```
+
+**Recommended GGUF Models:**
+- `qwen2.5-coder-3b-instruct-q4_k_m.gguf` - Good balance of speed and quality
+- `qwen2.5-coder-7b-instruct-q4_k_m.gguf` - Better quality, more resources
+- Any instruction-tuned GGUF model from [Hugging Face](https://huggingface.co/models?library=gguf)
+
+### Example: vLLM Configuration
+
+| Variable Name               | Value                                    |
+|-----------------------------|------------------------------------------|
+| `KOLLZSH_PLATFORM`          | `vllm`                                   |
+| `KOLLZSH_VLLM_MODEL`        | `Qwen/Qwen2.5-Coder-3B-Instruct`        |
+
+```bash
+# Configure vLLM platform
+export KOLLZSH_PLATFORM="vllm"
+export KOLLZSH_VLLM_MODEL="Qwen/Qwen2.5-Coder-3B-Instruct"
+
+# Optional: customize server URL (default is port 8000)
+export KOLLZSH_VLLM_SERVER_URL="http://localhost:8000"
+```
+
+**Starting the server:**
+
+The vLLM server is NOT auto-started on shell init. Use the helper function:
+
+```bash
+# Start the server using the helper function
+kollzsh-start-vllm
+
+# Stop the server when done
+kollzsh-stop-vllm
+```
+
+**Or start manually:**
+```bash
+vllm serve Qwen/Qwen2.5-Coder-3B-Instruct --port 8000
+```
+
+**Using with an already running server:**
+```bash
+# If you already have vLLM running, just set the platform
+export KOLLZSH_PLATFORM="vllm"
+export KOLLZSH_VLLM_SERVER_URL="http://localhost:8000"
+# Model is auto-detected from the running server
+```
+
+**Recommended vLLM Models:**
+- `Qwen/Qwen2.5-Coder-3B-Instruct` - Fast, good for command generation
+- `Qwen/Qwen2.5-Coder-7B-Instruct` - Better quality
+- `mistralai/Ministral-3B-Instruct-2412` - Lightweight alternative
+- Any instruction-tuned model supported by vLLM
 
 ## Usage
 

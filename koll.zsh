@@ -2,14 +2,28 @@
 (( ! ${+KOLLZSH_HOTKEY} )) && typeset -g KOLLZSH_HOTKEY='^o'
 # default thinking shortcut as Ctrl-t
 (( ! ${+KOLLZSH_THINKING_HOTKEY} )) && typeset -g KOLLZSH_THINKING_HOTKEY='^t'
-# default platform (ollama or MLX)
-(( ! ${+KOLLZSH_PLATFORM} )) && typeset -g KOLLZSH_PLATFORM='ollama'
+# default platform (ollama, mlx, llamacpp, or vllm)
+(( ! ${+KOLLZSH_PLATFORM} )) && KOLLZSH_PLATFORM='ollama'
 # default ollama model as qwen2.5-coder:3b (for MLX, use e.g. Qwen/Qwen3-14B-MLX-4bit)
-(( ! ${+KOLLZSH_MODEL} )) && typeset -g KOLLZSH_MODEL='qwen2.5-coder:3b'
+(( ! ${+KOLLZSH_MODEL} )) && KOLLZSH_MODEL='qwen2.5-coder:3b'
 # default response number as 5
-(( ! ${+KOLLZSH_COMMAND_COUNT} )) && typeset -g KOLLZSH_COMMAND_COUNT='5'
+(( ! ${+KOLLZSH_COMMAND_COUNT} )) && KOLLZSH_COMMAND_COUNT='5'
 # default ollama server host
-(( ! ${+KOLLZSH_URL} )) && typeset -g KOLLZSH_URL='http://localhost:11434'
+(( ! ${+KOLLZSH_URL} )) && KOLLZSH_URL='http://localhost:11434'
+# llama.cpp settings
+(( ! ${+KOLLZSH_LLAMACPP_PATH} )) && KOLLZSH_LLAMACPP_PATH=''
+(( ! ${+KOLLZSH_LLAMACPP_MODEL} )) && KOLLZSH_LLAMACPP_MODEL=''
+(( ! ${+KOLLZSH_LLAMACPP_SERVER_URL} )) && KOLLZSH_LLAMACPP_SERVER_URL='http://localhost:8080'
+(( ! ${+KOLLZSH_LLAMACPP_N_CTX} )) && KOLLZSH_LLAMACPP_N_CTX='2048'
+(( ! ${+KOLLZSH_LLAMACPP_N_GPU_LAYERS} )) && KOLLZSH_LLAMACPP_N_GPU_LAYERS='-1'
+# vLLM settings
+(( ! ${+KOLLZSH_VLLM_SERVER_URL} )) && KOLLZSH_VLLM_SERVER_URL='http://localhost:8000'
+(( ! ${+KOLLZSH_VLLM_MODEL} )) && KOLLZSH_VLLM_MODEL=''
+
+# Export all KOLLZSH variables so Python scripts can access them
+export KOLLZSH_PLATFORM KOLLZSH_MODEL KOLLZSH_COMMAND_COUNT KOLLZSH_URL KOLLZSH_API_KEY KOLLZSH_MAX_TOKENS
+export KOLLZSH_LLAMACPP_PATH KOLLZSH_LLAMACPP_MODEL KOLLZSH_LLAMACPP_SERVER_URL KOLLZSH_LLAMACPP_N_CTX KOLLZSH_LLAMACPP_N_GPU_LAYERS
+export KOLLZSH_VLLM_SERVER_URL KOLLZSH_VLLM_MODEL
 
 # Source utility functions
 source "${0:A:h}/utils.zsh"
@@ -39,6 +53,18 @@ validate_required() {
   if [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
     # MLX platform - check if uv is installed
     check_command "uv" || return 1
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
+    # llama.cpp platform
+    check_command "curl" || return 1
+
+    # Check if llama.cpp server is running or if we should start it
+    check_llamacpp_running || return 1
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
+    # vLLM platform
+    check_command "curl" || return 1
+
+    # Check if vLLM server is running
+    check_vllm_running || return 1
   else
     # Ollama platform
     check_command "curl" || return 1
@@ -78,6 +104,10 @@ fzf_kollzsh() {
   # Select utility script based on platform
   if [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
     KOLLZSH_COMMANDS=$("$PLUGIN_DIR/mlx_util.py" "$KOLLZSH_USER_QUERY" 2>/dev/null)
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
+    KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
+    KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
   else
     KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
   fi
@@ -164,7 +194,11 @@ fzf_kollzsh_thinking() {
   return 0
 }
 
-validate_required
+# Only validate on startup for platforms that don't require a server to be running
+# For llamacpp/vllm, validation happens when the hotkey is pressed
+if [[ "${KOLLZSH_PLATFORM:l}" != "llamacpp" && "${KOLLZSH_PLATFORM:l}" != "vllm" ]]; then
+  validate_required
+fi
 
 autoload -U fzf_kollzsh
 zle -N fzf_kollzsh
