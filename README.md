@@ -32,39 +32,56 @@ suggestions based on user input requirements.
   local inference.
 * **Thinking Mode**: Use Ctrl-t to run queries in thinking mode (MLX only) for
   more complex reasoning tasks.
+* **REPL Mode**: Interactive shell with history support - execute commands and see
+  output directly, with options to edit, copy, or run.
 * **Customizable**: Configure default shortcut, model, platform, and response number
   to suit your workflow.
 
-## Requirements
+## Installation
 
-### For Ollama (default)
-* `jq` for parsing JSON responses
+### Building from source (recommended)
+
+The plugin includes a Rust binary for fast command generation. To build:
+
+```bash
+# Clone the repository
+git clone https://github.com/keyvez/kollzsh.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/kollzsh
+
+# Build the Rust binary
+cd ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/kollzsh
+cargo build --release
+```
+
+If you don't have Rust installed, the plugin will fall back to Python scripts automatically.
+
+### Requirements
+
+**Core Requirements:**
 * `fzf` for interactive selection of commands
-* `curl` for making API requests
+
+**With Rust binary (recommended):**
+* Rust toolchain (`rustup` + `cargo`) for building
+
+**Without Rust binary (fallback):**
+* `python3` with `httpx` package
+
+### Platform-specific Requirements
+
+#### For Ollama (default)
 * `OLLAMA` server running
 
-### For MLX (Apple Silicon)
-* `jq` for parsing JSON responses
-* `fzf` for interactive selection of commands
+#### For MLX (Apple Silicon)
 * `uv` package manager ([install](https://docs.astral.sh/uv/getting-started/installation/))
 * Apple Silicon Mac (M1/M2/M3/M4)
 
 Dependencies (`mlx-lm`, `transformers`) are automatically managed by `uv` at runtime.
 
-### For llama.cpp
-* `jq` for parsing JSON responses
-* `fzf` for interactive selection of commands
-* `curl` for making API requests
-* `python3` with `httpx` package
-* llama.cpp installation with `llama-server` binary
+#### For llama.cpp
+* llama.cpp installation with `llama-cli` or `llama-server` binary
 * A GGUF model file
 
-### For vLLM
-* `jq` for parsing JSON responses
-* `fzf` for interactive selection of commands
-* `curl` for making API requests
-* `python3` with `httpx` package
-* vLLM installed (`pip install vllm`)
+#### For vLLM
+* vLLM server running (`pip install vllm`)
 * NVIDIA GPU with CUDA support
 
 ## Configuration Variables
@@ -77,6 +94,7 @@ The following environment variables can be set to customize the behavior:
 | `KOLLZSH_MODEL`             | Model to use for command generation               | `qwen2.5-coder:3b`         |
 | `KOLLZSH_HOTKEY`            | Default shortcut key for triggering the plugin    | `^o` (Ctrl-o)              |
 | `KOLLZSH_THINKING_HOTKEY`   | Shortcut key for thinking mode (MLX only)         | `^t` (Ctrl-t)              |
+| `KOLLZSH_REPL_HOTKEY`       | Shortcut key for REPL mode                        | `^x^o` (Ctrl-x Ctrl-o)     |
 | `KOLLZSH_COMMAND_COUNT`     | Number of command suggestions displayed           | `5`                        |
 | `KOLLZSH_URL`               | API endpoint URL (Ollama only)                    | `http://localhost:11434`   |
 | `KOLLZSH_API_KEY`           | API key for external APIs (DeepSeek/OpenAI)       | None                       |
@@ -249,18 +267,52 @@ export KOLLZSH_VLLM_SERVER_URL="http://localhost:8000"
     git clone https://github.com/keyvez/kollzsh.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/kollzsh
     ```
 
-2. Enable the plugin in ~/.zshrc:
+2. Build the Rust binary (optional but recommended for faster startup):
+    ```bash
+    cd ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/kollzsh
+    cargo build --release
+    ```
+
+3. Enable the plugin in ~/.zshrc:
     ```bash
     plugins=(
       [plugins...]
       kollzsh
     )
     ```
-3. Input what you want to do then trigger the plugin:
+
+4. Input what you want to do then trigger the plugin:
    - Press **Ctrl-o** (default) to get command suggestions via fzf
    - Press **Ctrl-t** (MLX only) to run in thinking mode for complex queries
-4. Interact with FZF: Type a query or input requirement, and FZF will display
-   suggested MacOS terminal commands. Select one to execute.
+   - Press **Ctrl-x Ctrl-o** (or type `kollzsh-repl`) to enter REPL mode
+
+5. Interact with FZF: Type a query or input requirement, and FZF will display
+   suggested terminal commands. Select one to execute.
+
+### REPL Mode (Ctrl-x Ctrl-o or `kollzsh-repl`)
+
+REPL mode provides an interactive shell for exploring AI-generated commands:
+
+```
+╔════════════════════════════════════════════════════════════╗
+║  🍺 KOLLZSH REPL  (AI-powered command suggestions)        ║
+╠════════════════════════════════════════════════════════════╣
+║  • Type a task description and press Enter                ║
+║  • Use ↑/↓ arrows to navigate history                     ║
+║  • Select a command with fzf, then choose to run it       ║
+║  • Type 'exit', 'quit', or press Ctrl-C/Ctrl-D to exit    ║
+╚════════════════════════════════════════════════════════════╝
+
+kollzsh> list all docker containers
+```
+
+After selecting a command from fzf, you can:
+- **[r]un** - Execute the command and see its output
+- **[e]dit** - Modify the command before running
+- **[c]opy** - Copy to clipboard
+- **[s]kip** - Skip and ask a new question
+
+History is persisted to `~/.local/share/kollzsh/repl_history`.
 
 **Get Started**
 
