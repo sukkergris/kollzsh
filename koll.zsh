@@ -4,10 +4,16 @@
 (( ! ${+KOLLZSH_THINKING_HOTKEY} )) && typeset -g KOLLZSH_THINKING_HOTKEY='^t'
 # default REPL shortcut as Ctrl-x Ctrl-o (two-key sequence, more reliable)
 (( ! ${+KOLLZSH_REPL_HOTKEY} )) && typeset -g KOLLZSH_REPL_HOTKEY='^x^o'
-# default platform (ollama, mlx, llamacpp, or vllm)
-(( ! ${+KOLLZSH_PLATFORM} )) && KOLLZSH_PLATFORM='ollama'
-# default ollama model as qwen2.5-coder:3b (for MLX, use e.g. Qwen/Qwen3-14B-MLX-4bit)
-(( ! ${+KOLLZSH_MODEL} )) && KOLLZSH_MODEL='qwen2.5-coder:3b'
+# default Claude Code agent shortcut as Ctrl-x Ctrl-s
+(( ! ${+KOLLZSH_CLAUDE_HOTKEY} )) && typeset -g KOLLZSH_CLAUDE_HOTKEY='^x^s'
+# default Claude Code Sonnet shortcut as Ctrl-\ (backslash)
+(( ! ${+KOLLZSH_CLAUDE_SONNET_HOTKEY} )) && typeset -g KOLLZSH_CLAUDE_SONNET_HOTKEY='^\\'
+# default platform (ollama, mlx, llamacpp, vllm, claude, or codex)
+(( ! ${+KOLLZSH_PLATFORM} )) && KOLLZSH_PLATFORM='claude'
+# default model (for MLX, use e.g. Qwen/Qwen3-14B-MLX-4bit)
+(( ! ${+KOLLZSH_MODEL} )) && KOLLZSH_MODEL='Qwen/Qwen3-14B-MLX-4bit'
+# default max tokens
+(( ! ${+KOLLZSH_MAX_TOKENS} )) && KOLLZSH_MAX_TOKENS='2048'
 # default response number as 5
 (( ! ${+KOLLZSH_COMMAND_COUNT} )) && KOLLZSH_COMMAND_COUNT='5'
 # default ollama server host
@@ -21,11 +27,19 @@
 # vLLM settings
 (( ! ${+KOLLZSH_VLLM_SERVER_URL} )) && KOLLZSH_VLLM_SERVER_URL='http://localhost:8000'
 (( ! ${+KOLLZSH_VLLM_MODEL} )) && KOLLZSH_VLLM_MODEL=''
+# Claude Code CLI settings (leave BASE_URL and AUTH_TOKEN empty to use Anthropic API directly)
+(( ! ${+KOLLZSH_CLAUDE_MODEL} )) && KOLLZSH_CLAUDE_MODEL='sonnet'
+(( ! ${+KOLLZSH_CLAUDE_BASE_URL} )) && KOLLZSH_CLAUDE_BASE_URL=''
+(( ! ${+KOLLZSH_CLAUDE_AUTH_TOKEN} )) && KOLLZSH_CLAUDE_AUTH_TOKEN=''
+# Codex CLI settings (uses OAuth from `codex login`; empty model = use ~/.codex/config.toml default)
+(( ! ${+KOLLZSH_CODEX_MODEL} )) && KOLLZSH_CODEX_MODEL=''
 
 # Export all KOLLZSH variables so subprocesses can access them
 export KOLLZSH_PLATFORM KOLLZSH_MODEL KOLLZSH_COMMAND_COUNT KOLLZSH_URL KOLLZSH_API_KEY KOLLZSH_MAX_TOKENS
 export KOLLZSH_LLAMACPP_PATH KOLLZSH_LLAMACPP_MODEL KOLLZSH_LLAMACPP_SERVER_URL KOLLZSH_LLAMACPP_N_CTX KOLLZSH_LLAMACPP_N_GPU_LAYERS
 export KOLLZSH_VLLM_SERVER_URL KOLLZSH_VLLM_MODEL
+export KOLLZSH_CLAUDE_MODEL KOLLZSH_CLAUDE_BASE_URL KOLLZSH_CLAUDE_AUTH_TOKEN
+export KOLLZSH_CODEX_MODEL
 
 # Path to the Rust binary (built with `cargo build --release`)
 KOLLZSH_BIN="${0:A:h}/target/release/kollzsh"
@@ -37,6 +51,7 @@ source "${0:A:h}/utils.zsh"
 KOLLZSH_LOG_FILE="/tmp/kollzsh_debug.log"
 touch "$KOLLZSH_LOG_FILE"
 chmod 666 "$KOLLZSH_LOG_FILE"
+typeset -g KOLLZSH_LAST_ERROR=""
 
 log_debug() {
   local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -49,26 +64,255 @@ log_debug() {
   } >> "$KOLLZSH_LOG_FILE" 2>&1
 }
 
+kollzsh_show_error() {
+  local msg="$1"
+  local detail="$2"
+
+  log_debug "$msg" "$detail"
+
+  # Show a one-line message in the ZLE prompt area when possible
+  if [[ -n "$WIDGET" ]]; then
+    zle -M "$msg"
+  fi
+
+  # Print full details to stderr so it's visible even if ZLE clears output
+  print -u2 -- "$msg"
+  if [[ -n "$detail" ]]; then
+    print -u2 -- "$detail"
+  fi
+  print -u2 -- "Log: $KOLLZSH_LOG_FILE"
+}
+
+_kollzsh_capture_cmd() {
+  local errfile
+  errfile=$(mktemp "${TMPDIR:-/tmp}/kollzsh_err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/kollzsh_err.$$"
+  : > "$errfile"
+
+  local output
+  output=$("$@" 2>"$errfile")
+  local exit_code=$?
+
+  local err=""
+  if [[ -s "$errfile" ]]; then
+    err=$(<"$errfile")
+  fi
+  rm -f "$errfile" 2>/dev/null
+
+  KOLLZSH_LAST_ERROR="$err"
+  if [[ -n "$err" ]]; then
+    log_debug "Backend stderr:" "$err"
+  fi
+
+  print -r -- "$output"
+  return $exit_code
+}
+
+_kollzsh_claude_cmd() {
+  local user_query="$1"
+  local cmd_count="${KOLLZSH_COMMAND_COUNT:-5}"
+  local claude_model="${KOLLZSH_CLAUDE_MODEL}"
+  local claude_base_url="${KOLLZSH_CLAUDE_BASE_URL}"
+  local claude_auth_token="${KOLLZSH_CLAUDE_AUTH_TOKEN}"
+
+  local sys_prompt="You are a shell command generator. Given a task description, return exactly ${cmd_count} shell commands that accomplish the task on $(uname -s). Return ONLY a JSON array of command strings, no explanation. Example: [\"ls -la\", \"pwd\"]"
+
+  # Build env overrides — only set BASE_URL/AUTH_TOKEN when configured (empty = use Anthropic API)
+  local -a env_prefix=(CLAUDECODE=)
+  if [[ -n "$claude_base_url" ]]; then
+    env_prefix+=(ANTHROPIC_BASE_URL="$claude_base_url")
+  fi
+  if [[ -n "$claude_auth_token" ]]; then
+    env_prefix+=(ANTHROPIC_AUTH_TOKEN="$claude_auth_token")
+  fi
+
+  local output
+  output=$(env "${env_prefix[@]}" \
+    claude -p \
+    --model "$claude_model" \
+    --system-prompt "$sys_prompt" \
+    --no-session-persistence \
+    --tools "" \
+    "$user_query" 2>/dev/null)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]] || [[ -z "$output" ]]; then
+    log_debug "Claude CLI failed (exit: $exit_code)" "$output"
+    return 1
+  fi
+
+  log_debug "Claude raw response:" "$output"
+
+  # Extract JSON array from response and output one command per line
+  local commands
+  commands=$(echo "$output" | python3 -c '
+import sys, json, re
+text = sys.stdin.read()
+# Try to find a JSON array in the response
+match = re.search(r"\[.*\]", text, re.DOTALL)
+if match:
+    try:
+        cmds = json.loads(match.group())
+        for c in cmds:
+            print(c)
+        sys.exit(0)
+    except: pass
+# Fallback: extract lines that look like commands from code blocks
+in_block = False
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("```"):
+        in_block = not in_block
+        continue
+    if in_block and stripped and not stripped.startswith("#"):
+        print(stripped)
+' 2>/dev/null)
+
+  if [[ -z "$commands" ]]; then
+    log_debug "Failed to parse commands from Claude response"
+    return 1
+  fi
+
+  print -r -- "$commands"
+  return 0
+}
+
+_kollzsh_codex_cmd() {
+  local user_query="$1"
+  local cmd_count="${KOLLZSH_COMMAND_COUNT:-5}"
+  local codex_model="${KOLLZSH_CODEX_MODEL}"
+
+  local prompt="You are a shell command generator. Given a task description, return exactly ${cmd_count} shell commands that accomplish the task on $(uname -s). Return ONLY the commands, no explanation.
+
+Task: ${user_query}"
+
+  # Constrain the response shape so we get parseable JSON back
+  local schema_file
+  schema_file=$(mktemp -t kollzsh_codex_schema) || return 1
+  local out_file
+  out_file=$(mktemp -t kollzsh_codex_out) || { rm -f "$schema_file"; return 1; }
+
+  print -r -- '{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}}},"required":["commands"],"additionalProperties":false}' > "$schema_file"
+
+  local -a model_args=()
+  [[ -n "$codex_model" ]] && model_args=(--model "$codex_model")
+
+  # NOTE: stdin must be redirected from /dev/null. When stdin is not a TTY,
+  # `codex exec` blocks on "Reading additional input from stdin..." forever,
+  # which would hang the zle widget.
+  local err
+  err=$(codex exec \
+    "${model_args[@]}" \
+    --skip-git-repo-check \
+    --ephemeral \
+    --sandbox read-only \
+    --color never \
+    --output-schema "$schema_file" \
+    --output-last-message "$out_file" \
+    "$prompt" < /dev/null 2>&1 > /dev/null)
+  local exit_code=$?
+
+  local output
+  output=$(<"$out_file")
+
+  KOLLZSH_LAST_ERROR="$err"
+  if [[ $exit_code -ne 0 ]] || [[ -z "$output" ]]; then
+    rm -f "$schema_file" "$out_file" 2>/dev/null
+    log_debug "Codex CLI failed (exit: $exit_code)" "$err"
+    return 1
+  fi
+
+  log_debug "Codex raw response:" "$output"
+
+  # NOTE: feed the file straight to python. Piping via `echo "$output"` would
+  # collapse backslash escapes (e.g. `\\;` -> `\;`) and corrupt the JSON.
+  local commands
+  commands=$(python3 -c '
+import sys, json, re
+text = sys.stdin.read()
+# Preferred path: the --output-schema object
+try:
+    obj = json.loads(text)
+    if isinstance(obj, dict) and isinstance(obj.get("commands"), list):
+        for c in obj["commands"]:
+            print(c)
+        sys.exit(0)
+except Exception: pass
+# Fallback: a bare JSON array somewhere in the text
+match = re.search(r"\[.*\]", text, re.DOTALL)
+if match:
+    try:
+        for c in json.loads(match.group()):
+            print(c)
+        sys.exit(0)
+    except Exception: pass
+# Last resort: fenced code block lines
+in_block = False
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("```"):
+        in_block = not in_block
+        continue
+    if in_block and stripped and not stripped.startswith("#"):
+        print(stripped)
+' < "$out_file" 2>/dev/null)
+
+  rm -f "$schema_file" "$out_file" 2>/dev/null
+
+  if [[ -z "$commands" ]]; then
+    log_debug "Failed to parse commands from Codex response"
+    return 1
+  fi
+
+  print -r -- "$commands"
+  return 0
+}
+
+check_codex_auth() {
+  # Codex uses OAuth credentials stored in $CODEX_HOME (default ~/.codex)
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  if [[ ! -f "$codex_home/auth.json" ]]; then
+    echo "🚨 Codex is not authenticated!"
+    echo "Please sign in with: codex login"
+    return 1
+  fi
+  return 0
+}
+
 validate_required() {
   # Check required tools are installed
   check_command "fzf" || return 1
 
-  # Check if Rust binary exists
-  if [[ ! -x "$KOLLZSH_BIN" ]]; then
-    # Fall back to Python if Rust binary not built
-    check_command "python3" || return 1
-  fi
-
-  if [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
+  if [[ "${KOLLZSH_PLATFORM:l}" == "codex" ]]; then
+    # Codex CLI platform - check codex is installed and authenticated
+    check_command "codex" || return 1
+    check_codex_auth || return 1
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "claude" ]]; then
+    # Claude Code CLI platform - check claude is installed
+    check_command "claude" || return 1
+    check_claude_server || return 1
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
+    # Check if Rust binary exists (not needed for claude/mlx)
+    if [[ ! -x "$KOLLZSH_BIN" ]]; then
+      check_command "python3" || return 1
+    fi
     # MLX platform - check if uv is installed (MLX still uses Python)
     check_command "uv" || return 1
   elif [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
+    if [[ ! -x "$KOLLZSH_BIN" ]]; then
+      check_command "python3" || return 1
+    fi
     # llama.cpp platform
     check_llamacpp_running || return 1
   elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
+    if [[ ! -x "$KOLLZSH_BIN" ]]; then
+      check_command "python3" || return 1
+    fi
     # vLLM platform
     check_vllm_running || return 1
   else
+    if [[ ! -x "$KOLLZSH_BIN" ]]; then
+      check_command "python3" || return 1
+    fi
     # Ollama platform
     check_ollama_running || return 1
 
@@ -83,12 +327,16 @@ validate_required() {
 
 fzf_kollzsh() {
   setopt extendedglob
-  validate_required
-  if [ $? -eq 1 ]; then
+  local validate_out
+  validate_out=$(validate_required 2>&1)
+  local validate_status=$?
+  if [[ $validate_status -ne 0 ]]; then
+    kollzsh_show_error "kollzsh: requirements check failed" "$validate_out"
     return 1
   fi
 
   KOLLZSH_USER_QUERY=$BUFFER
+  log_debug "User query:" "$KOLLZSH_USER_QUERY"
 
   zle end-of-line
   zle reset-prompt
@@ -96,38 +344,53 @@ fzf_kollzsh() {
   print
   print -u1 "👻Please wait..."
 
-  log_debug "Raw response:" "$KOLLZSH_RESPONSE"
-
   # Get absolute path to the script directory
   PLUGIN_DIR=${${(%):-%x}:A:h}
 
   # Select backend based on platform
-  if [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
+  local cmd_status=0
+  if [[ "${KOLLZSH_PLATFORM:l}" == "codex" ]]; then
+    # Codex CLI (OAuth via `codex login`)
+    KOLLZSH_COMMANDS=$(_kollzsh_codex_cmd "$KOLLZSH_USER_QUERY")
+    cmd_status=$?
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "claude" ]]; then
+    # Claude Code CLI with local LM Studio backend
+    KOLLZSH_COMMANDS=$(_kollzsh_claude_cmd "$KOLLZSH_USER_QUERY")
+    cmd_status=$?
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
     # MLX still uses Python (requires mlx-lm library)
-    KOLLZSH_COMMANDS=$("$PLUGIN_DIR/mlx_util.py" "$KOLLZSH_USER_QUERY" 2>/dev/null)
+    KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$PLUGIN_DIR/mlx_util.py" "$KOLLZSH_USER_QUERY")
+    cmd_status=$?
   elif [[ -x "$KOLLZSH_BIN" ]]; then
     # Use Rust binary if available
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      KOLLZSH_COMMANDS=$("$KOLLZSH_BIN" llamacpp "$KOLLZSH_USER_QUERY" 2>/dev/null)
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" llamacpp "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      KOLLZSH_COMMANDS=$("$KOLLZSH_BIN" vllm "$KOLLZSH_USER_QUERY" 2>/dev/null)
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" vllm "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     else
-      KOLLZSH_COMMANDS=$("$KOLLZSH_BIN" ollama "$KOLLZSH_USER_QUERY" 2>/dev/null)
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" ollama "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     fi
   else
     # Fall back to Python scripts
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     else
-      KOLLZSH_COMMANDS=$(python3 "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
+      cmd_status=$?
     fi
   fi
   
-  if [ $? -ne 0 ] || [ -z "$KOLLZSH_COMMANDS" ]; then
-    log_debug "Failed to parse commands"
-    echo "Error: Failed to parse commands"
+  if [[ $cmd_status -ne 0 ]] || [[ -z "$KOLLZSH_COMMANDS" ]]; then
+    log_debug "Failed to parse commands (exit: $cmd_status)"
+    tput cuu 1 2>/dev/null
+    kollzsh_show_error "kollzsh: backend failed to return commands" "$KOLLZSH_LAST_ERROR"
     return 1
   fi
   
@@ -181,11 +444,13 @@ fzf_kollzsh_thinking() {
   PLUGIN_DIR=${${(%):-%x}:A:h}
 
   # Run MLX in thinking mode
-  KOLLZSH_RESPONSE=$("$PLUGIN_DIR/mlx_util.py" "$KOLLZSH_USER_QUERY" --thinking 2>/dev/null)
+  KOLLZSH_RESPONSE=$(_kollzsh_capture_cmd "$PLUGIN_DIR/mlx_util.py" "$KOLLZSH_USER_QUERY" --thinking)
+  local cmd_status=$?
 
-  if [ $? -ne 0 ] || [ -z "$KOLLZSH_RESPONSE" ]; then
-    log_debug "Thinking mode failed"
-    echo "Error: Thinking mode failed"
+  if [[ $cmd_status -ne 0 ]] || [[ -z "$KOLLZSH_RESPONSE" ]]; then
+    log_debug "Thinking mode failed (exit: $cmd_status)"
+    tput cuu 1 2>/dev/null
+    kollzsh_show_error "kollzsh: thinking mode failed" "$KOLLZSH_LAST_ERROR"
     return 1
   fi
 
@@ -219,27 +484,36 @@ _kollzsh_get_commands() {
   local plugin_dir="${0:A:h}"
   local commands=""
 
-  if [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
-    commands=$("$plugin_dir/mlx_util.py" "$user_query" 2>/dev/null)
+  if [[ "${KOLLZSH_PLATFORM:l}" == "codex" ]]; then
+    commands=$(_kollzsh_codex_cmd "$user_query")
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "claude" ]]; then
+    commands=$(_kollzsh_claude_cmd "$user_query")
+  elif [[ "${KOLLZSH_PLATFORM:l}" == "mlx" ]]; then
+    commands=$(_kollzsh_capture_cmd "$plugin_dir/mlx_util.py" "$user_query")
   elif [[ -x "$KOLLZSH_BIN" ]]; then
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      commands=$("$KOLLZSH_BIN" llamacpp "$user_query" 2>/dev/null)
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" llamacpp "$user_query")
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      commands=$("$KOLLZSH_BIN" vllm "$user_query" 2>/dev/null)
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" vllm "$user_query")
     else
-      commands=$("$KOLLZSH_BIN" ollama "$user_query" 2>/dev/null)
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_BIN" ollama "$user_query")
     fi
   else
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      commands=$(python3 "$plugin_dir/llamacpp_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/llamacpp_util.py" "$user_query")
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      commands=$(python3 "$plugin_dir/vllm_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/vllm_util.py" "$user_query")
     else
-      commands=$(python3 "$plugin_dir/ollama_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/ollama_util.py" "$user_query")
     fi
   fi
+  local backend_status=$?
 
-  echo "$commands"
+  # Propagate backend failure; otherwise callers see exit 0 with empty output.
+  (( backend_status != 0 )) && return $backend_status
+  [[ -z "$commands" ]] && return 1
+
+  print -r -- "$commands"
 }
 
 # REPL mode function
@@ -449,9 +723,141 @@ fzf_kollzsh_repl() {
   zle reset-prompt
 }
 
+# Claude Code agent mode - runs claude as an autonomous agent that executes commands
+kollzsh_claude_agent() {
+  local user_query="$BUFFER"
+
+  if [[ -z "$user_query" ]]; then
+    zle -M "kollzsh: type a prompt first, then press Ctrl-l"
+    return 1
+  fi
+
+  # Check claude CLI is available
+  if ! command -v claude &> /dev/null; then
+    zle -M "kollzsh: claude CLI not found! Install: npm install -g @anthropic-ai/claude-code"
+    return 1
+  fi
+
+  # Check local server is reachable (only if a custom base URL is configured)
+  local claude_base_url="${KOLLZSH_CLAUDE_BASE_URL}"
+  if [[ -n "$claude_base_url" ]]; then
+    if ! curl -s --connect-timeout 2 "${claude_base_url}/v1/models" &> /dev/null; then
+      zle -M "kollzsh: server not running at ${claude_base_url} - start it first"
+      return 1
+    fi
+  fi
+
+  log_debug "Claude agent query:" "$user_query"
+
+  # Clear buffer and drop into claude agent
+  BUFFER=""
+  zle reset-prompt
+
+  local model_info="${KOLLZSH_CLAUDE_MODEL}"
+  [[ -n "$claude_base_url" ]] && model_info+=" via ${claude_base_url}" || model_info+=" via Anthropic API"
+
+  print
+  print "\033[1m\033[35m🤖 Launching Claude Code agent...\033[0m"
+  print "\033[2mPrompt: ${user_query}\033[0m"
+  print "\033[2mModel: ${model_info}\033[0m"
+  print
+
+  # Build env overrides — only set BASE_URL/AUTH_TOKEN when configured
+  local -a env_prefix=(CLAUDECODE=)
+  if [[ -n "$claude_base_url" ]]; then
+    env_prefix+=(ANTHROPIC_BASE_URL="$claude_base_url")
+  fi
+  if [[ -n "${KOLLZSH_CLAUDE_AUTH_TOKEN}" ]]; then
+    env_prefix+=(ANTHROPIC_AUTH_TOKEN="${KOLLZSH_CLAUDE_AUTH_TOKEN}")
+  fi
+
+  # Launch claude interactively with the prompt pre-set
+  env "${env_prefix[@]}" \
+    claude \
+    --model "${KOLLZSH_CLAUDE_MODEL}" \
+    --system-prompt "" \
+    --dangerously-skip-permissions \
+    --tools "Bash,Read" \
+    -- "$user_query"
+
+  local exit_code=$?
+
+  print
+  if [[ $exit_code -eq 0 ]]; then
+    print "\033[32m✓ Claude agent finished\033[0m"
+  else
+    print "\033[31m✗ Claude agent exited with code $exit_code\033[0m"
+  fi
+
+  log_debug "Claude agent finished (exit: $exit_code)"
+
+  zle reset-prompt
+  return 0
+}
+
+# Claude Code Sonnet mode - runs claude with latest Sonnet via Anthropic API
+kollzsh_claude_sonnet() {
+  local user_query="$BUFFER"
+
+  if [[ -z "$user_query" ]]; then
+    zle -M "kollzsh: type a prompt first, then press Ctrl-\\"
+    return 1
+  fi
+
+  # Check claude CLI is available
+  if ! command -v claude &> /dev/null; then
+    zle -M "kollzsh: claude CLI not found! Install: npm install -g @anthropic-ai/claude-code"
+    return 1
+  fi
+
+  log_debug "Claude Sonnet query:" "$user_query"
+
+  # Clear buffer and drop into claude agent
+  BUFFER=""
+  zle reset-prompt
+
+  print
+  print "\033[1m\033[35m🤖 Launching Claude Code (Sonnet)...\033[0m"
+  print "\033[2mPrompt: ${user_query}\033[0m"
+  print "\033[2mModel: sonnet (latest)\033[0m"
+  print
+
+  # Launch claude with Sonnet via Anthropic API (no custom base URL)
+  claude \
+    --model "sonnet" \
+    --system-prompt "" \
+    --dangerously-skip-permissions \
+    --tools "Bash,Read" \
+    -- "$user_query"
+
+  local exit_code=$?
+
+  print
+  if [[ $exit_code -eq 0 ]]; then
+    print "\033[32m✓ Claude Sonnet agent finished\033[0m"
+  else
+    print "\033[31m✗ Claude Sonnet agent exited with code $exit_code\033[0m"
+  fi
+
+  log_debug "Claude Sonnet agent finished (exit: $exit_code)"
+
+  zle reset-prompt
+  return 0
+}
+
+# ZLE widget for Claude agent mode
+fzf_kollzsh_claude() {
+  kollzsh_claude_agent
+}
+
+# ZLE widget for Claude Sonnet mode
+fzf_kollzsh_claude_sonnet() {
+  kollzsh_claude_sonnet
+}
+
 # Only validate on startup for platforms that don't require a server to be running
 # For llamacpp/vllm, validation happens when the hotkey is pressed
-if [[ "${KOLLZSH_PLATFORM:l}" != "llamacpp" && "${KOLLZSH_PLATFORM:l}" != "vllm" ]]; then
+if [[ "${KOLLZSH_PLATFORM:l}" != "llamacpp" && "${KOLLZSH_PLATFORM:l}" != "vllm" && "${KOLLZSH_PLATFORM:l}" != "claude" && "${KOLLZSH_PLATFORM:l}" != "codex" ]]; then
   validate_required
 fi
 
@@ -467,5 +873,114 @@ autoload -U fzf_kollzsh_repl
 zle -N fzf_kollzsh_repl
 bindkey "$KOLLZSH_REPL_HOTKEY" fzf_kollzsh_repl
 
+autoload -U fzf_kollzsh_claude
+zle -N fzf_kollzsh_claude
+bindkey "$KOLLZSH_CLAUDE_HOTKEY" fzf_kollzsh_claude
+
+autoload -U fzf_kollzsh_claude_sonnet
+zle -N fzf_kollzsh_claude_sonnet
+bindkey "$KOLLZSH_CLAUDE_SONNET_HOTKEY" fzf_kollzsh_claude_sonnet
+
 # Direct command alias for REPL mode
 alias kollzsh-repl='kollzsh_repl'
+
+# ── bare "# <task>" intercept ────────────────────────────────────────
+# Typing  # upgrade flutter  and pressing Enter asks the LLM for a single
+# best command, runs it, and records it in history as:
+#   <command> # <original comment>
+#
+# Set KOLLZSH_COMMENT_RUN=0 to disable this intercept entirely.
+(( ! ${+KOLLZSH_COMMENT_RUN} )) && KOLLZSH_COMMENT_RUN=1
+export KOLLZSH_COMMENT_RUN
+
+# Ask the backend for exactly one command (no fzf picker).
+_kollzsh_single_command() {
+  local user_query="$1"
+  local saved_count="$KOLLZSH_COMMAND_COUNT"
+  # Ask for one candidate; take the first line regardless of what comes back.
+  KOLLZSH_COMMAND_COUNT=1
+  local out
+  out=$(_kollzsh_get_commands "$user_query")
+  local status_code=$?
+  KOLLZSH_COMMAND_COUNT="$saved_count"
+
+  (( status_code != 0 )) && return $status_code
+
+  # First non-empty line
+  local line
+  for line in ${(f)out}; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -n "$line" ]] && { print -r -- "$line"; return 0; }
+  done
+  return 1
+}
+
+_kollzsh_comment_run() {
+  local comment="$1"
+
+  print
+  print -u1 "👻Please wait..."
+
+  local cmd
+  cmd=$(_kollzsh_single_command "$comment")
+  local gen_status=$?
+
+  tput cuu 1 2>/dev/null # cleanup waiting message
+
+  if (( gen_status != 0 )) || [[ -z "$cmd" ]]; then
+    kollzsh_show_error "kollzsh: backend failed to return a command" "$KOLLZSH_LAST_ERROR"
+    return 1
+  fi
+
+  # Record as "<command> # <comment>" so history explains itself.
+  local hist_entry="${cmd} # ${comment}"
+  print -s -- "$hist_entry"
+  fc -AI 2>/dev/null
+
+  log_debug "Comment-run:" "$hist_entry"
+
+  # Show what is about to run, then execute it.
+  print -r -- "$ ${cmd}"
+  eval "$cmd"
+  return $?
+}
+
+# ── #@ prefix intercept ──────────────────────────────────────────────
+# Typing  #@ <query>  and pressing Enter triggers kollzsh automatically.
+# The overhead for normal commands is a single string prefix check (~0ms).
+_kollzsh_accept_line() {
+  # Bare "# <task>" (but NOT "#@", handled below) — generate and run.
+  if (( KOLLZSH_COMMENT_RUN )) && [[ "$BUFFER" == '#'* && "$BUFFER" != '#@'* ]]; then
+    local comment="${BUFFER#\#}"
+    comment="${comment#"${comment%%[![:space:]]*}"}"
+
+    if [[ -n "$comment" ]]; then
+      # Clear the prompt line, then run outside of zle.
+      BUFFER=""
+      zle .accept-line
+      _kollzsh_comment_run "$comment"
+      return 0
+    fi
+  fi
+
+  if [[ "$BUFFER" == '#@'* ]]; then
+    # Strip the "#@" prefix and optional leading whitespace after it
+    BUFFER="${BUFFER#\#@}"
+    BUFFER="${BUFFER#"${BUFFER%%[![:space:]]*}"}"
+
+    if [[ -z "$BUFFER" ]]; then
+      # Bare "#@" with no query — just clear and return
+      zle reset-prompt
+      return 0
+    fi
+
+    # Invoke kollzsh with the query
+    fzf_kollzsh
+    return $?
+  fi
+
+  # Normal command — pass through to the real accept-line
+  zle .accept-line
+}
+
+zle -N accept-line _kollzsh_accept_line

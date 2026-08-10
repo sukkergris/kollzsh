@@ -16,16 +16,19 @@ koll.zsh: keyvez ollama for zsh
 
 <img src="demo.svg" alt="Kollzsh Demo" width="600">
 
-An [`oh-my-zsh`](https://ohmyz.sh) plugin that integrates the OLLAMA AI model
+An [`oh-my-zsh`](https://ohmyz.sh) plugin that integrates AI models
 with [fzf](https://github.com/junegunn/fzf) to provide intelligent command
 suggestions based on user input requirements.
 
 ## Features
 
-* **Intelligent Command Suggestions**: Use OLLAMA, MLX, or llama.cpp to generate relevant
-  terminal commands based on your query or input requirement.
+* **Intelligent Command Suggestions**: Use OLLAMA, MLX, llama.cpp, vLLM, or Claude Code CLI
+  to generate relevant terminal commands based on your query or input requirement.
 * **FZF Integration**: Interactively select suggested commands using FZF's fuzzy
   finder, ensuring you find the right command for your task.
+* **Claude Code Agent Mode**: Press Ctrl-l to launch Claude Code CLI as an
+  autonomous agent that acts on your prompt and executes multiple commands,
+  powered by a local LM Studio model - no API key needed.
 * **MLX Support**: Run models locally on Apple Silicon using MLX framework for
   faster inference without a server.
 * **llama.cpp Support**: Run GGUF models locally using llama.cpp for cross-platform
@@ -67,6 +70,10 @@ If you don't have Rust installed, the plugin will fall back to Python scripts au
 
 ### Platform-specific Requirements
 
+#### For Claude Code CLI
+* [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) installed
+* [LM Studio](https://lmstudio.ai) running with a loaded model (e.g. `GLM-4.7-Flash-MLX-4bit`)
+
 #### For Ollama (default)
 * `OLLAMA` server running
 
@@ -90,15 +97,19 @@ The following environment variables can be set to customize the behavior:
 
 | Variable Name               | Description                                        | Default Value              |
 |-----------------------------|---------------------------------------------------|----------------------------|
-| `KOLLZSH_PLATFORM`          | Platform to use (`ollama`, `MLX`, `llamacpp`, or `vllm`) | `ollama`              |
-| `KOLLZSH_MODEL`             | Model to use for command generation               | `qwen2.5-coder:3b`         |
+| `KOLLZSH_PLATFORM`          | Platform to use (`ollama`, `MLX`, `llamacpp`, `vllm`, or `claude`) | `mlx`        |
+| `KOLLZSH_MODEL`             | Model to use for command generation               | `Qwen/Qwen3-14B-MLX-4bit`  |
 | `KOLLZSH_HOTKEY`            | Default shortcut key for triggering the plugin    | `^o` (Ctrl-o)              |
 | `KOLLZSH_THINKING_HOTKEY`   | Shortcut key for thinking mode (MLX only)         | `^t` (Ctrl-t)              |
 | `KOLLZSH_REPL_HOTKEY`       | Shortcut key for REPL mode                        | `^x^o` (Ctrl-x Ctrl-o)     |
+| `KOLLZSH_CLAUDE_HOTKEY`     | Shortcut key for Claude Code agent mode           | `^l` (Ctrl-l)              |
 | `KOLLZSH_COMMAND_COUNT`     | Number of command suggestions displayed           | `5`                        |
 | `KOLLZSH_URL`               | API endpoint URL (Ollama only)                    | `http://localhost:11434`   |
 | `KOLLZSH_API_KEY`           | API key for external APIs (DeepSeek/OpenAI)       | None                       |
-| `KOLLZSH_MAX_TOKENS`        | Maximum tokens for MLX response                   | `1024`                     |
+| `KOLLZSH_MAX_TOKENS`        | Maximum tokens for MLX response                   | `2048`                     |
+| `KOLLZSH_CLAUDE_MODEL`      | Model name for Claude Code CLI (LM Studio)        | `GLM-4.7-Flash-MLX-4bit`  |
+| `KOLLZSH_CLAUDE_BASE_URL`   | LM Studio server URL for Claude Code CLI          | `http://localhost:1234`    |
+| `KOLLZSH_CLAUDE_AUTH_TOKEN`  | Auth token for LM Studio server                   | `lmstudio`                 |
 | `KOLLZSH_LLAMACPP_PATH`     | Path to llama.cpp installation directory          | None                       |
 | `KOLLZSH_LLAMACPP_MODEL`    | Path to GGUF model file for llama.cpp             | None                       |
 | `KOLLZSH_LLAMACPP_SERVER_URL` | llama.cpp server URL                            | `http://localhost:8080`    |
@@ -106,6 +117,47 @@ The following environment variables can be set to customize the behavior:
 | `KOLLZSH_LLAMACPP_N_GPU_LAYERS` | GPU layers for llama.cpp (-1 for all)         | `-1`                       |
 | `KOLLZSH_VLLM_SERVER_URL`   | vLLM server URL                                   | `http://localhost:8000`    |
 | `KOLLZSH_VLLM_MODEL`        | Model name for vLLM                               | None (auto-detect)         |
+
+### Example: Claude Code CLI Configuration (LM Studio)
+
+The Claude Code integration works in two ways:
+
+- **Agent mode (Ctrl-l)**: Launches Claude Code as an autonomous agent that reads your
+  prompt, plans, and executes multiple shell commands to accomplish the task. This is
+  independent of `KOLLZSH_PLATFORM` and always available.
+- **Suggestion mode (`KOLLZSH_PLATFORM=claude`)**: Uses Claude Code as a backend for
+  the Ctrl-o command suggestion flow (like Ollama/MLX).
+
+Both modes use [LM Studio](https://lmstudio.ai) as the local inference backend.
+No Anthropic API key required.
+
+| Variable Name              | Value                                    |
+|----------------------------|------------------------------------------|
+| `KOLLZSH_CLAUDE_MODEL`     | `GLM-4.7-Flash-MLX-4bit`                |
+| `KOLLZSH_CLAUDE_BASE_URL`  | `http://localhost:1234`                  |
+| `KOLLZSH_CLAUDE_AUTH_TOKEN` | `lmstudio`                              |
+
+```bash
+# Configure the local model for Claude Code (used by both Ctrl-l and KOLLZSH_PLATFORM=claude)
+export KOLLZSH_CLAUDE_MODEL="GLM-4.7-Flash-MLX-4bit"
+
+# Optional: customize LM Studio URL and auth (defaults shown)
+export KOLLZSH_CLAUDE_BASE_URL="http://localhost:1234"
+export KOLLZSH_CLAUDE_AUTH_TOKEN="lmstudio"
+
+# Optional: also use Claude Code for Ctrl-o command suggestions
+export KOLLZSH_PLATFORM="claude"
+```
+
+**Setup:**
+
+1. Install [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code): `npm install -g @anthropic-ai/claude-code`
+2. Install [LM Studio](https://lmstudio.ai) and download the `GLM-4.7-Flash-MLX-4bit` model
+3. Start the LM Studio server (or via CLI: `lms server start --port 1234`)
+4. Press **Ctrl-l** with a prompt in your terminal to launch the agent
+
+Claude Code connects to LM Studio's Anthropic-compatible `/v1/messages` endpoint,
+so the model runs entirely on your machine.
 
 ### Example: DeepSeek API Configuration
 
@@ -283,6 +335,7 @@ export KOLLZSH_VLLM_SERVER_URL="http://localhost:8000"
 
 4. Input what you want to do then trigger the plugin:
    - Press **Ctrl-o** (default) to get command suggestions via fzf
+   - Press **Ctrl-l** to launch Claude Code agent mode (executes commands autonomously)
    - Press **Ctrl-t** (MLX only) to run in thinking mode for complex queries
    - Press **Ctrl-x Ctrl-o** (or type `kollzsh-repl`) to enter REPL mode
 
@@ -313,6 +366,30 @@ After selecting a command from fzf, you can:
 - **[s]kip** - Skip and ask a new question
 
 History is persisted to `~/.local/share/kollzsh/repl_history`.
+
+### Claude Code Agent Mode (Ctrl-l)
+
+Agent mode is different from command suggestions. Instead of showing you a list
+of commands to pick from, it hands your prompt to the Claude Code CLI which
+autonomously plans and executes multiple commands to accomplish the task.
+
+Type a task description in your terminal, then press **Ctrl-l**:
+
+```
+find all TODO comments in this project and summarize them█
+                                                         ^
+                                                     Ctrl-l
+```
+
+Claude Code will:
+1. Read your prompt
+2. Plan the steps needed
+3. Run shell commands (grep, find, cat, etc.) automatically
+4. Show you the results
+
+This uses `GLM-4.7-Flash-MLX-4bit` via LM Studio by default. Requires LM Studio
+running on `localhost:1234`. Configure with `KOLLZSH_CLAUDE_MODEL`,
+`KOLLZSH_CLAUDE_BASE_URL`, and `KOLLZSH_CLAUDE_AUTH_TOKEN`.
 
 **Get Started**
 

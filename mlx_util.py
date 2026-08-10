@@ -2,8 +2,8 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "transformers==4.52.4",
-#     "mlx-lm==0.25.2",
+#     "transformers>=4.52.4",
+#     "mlx-lm>=0.26.0",
 # ]
 # ///
 """

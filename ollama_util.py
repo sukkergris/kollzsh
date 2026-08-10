@@ -19,11 +19,8 @@ logging.basicConfig(
 
 def log_debug(*messages):
     """Log debug messages if debug mode is enabled."""
-    if os.getenv('KOLLZSH_DEBUG'):
-        message = ' '.join(str(m) for m in messages)
-        logging.debug(message)
-    else:
-        logging.debug(message)
+    message = ' '.join(str(m) for m in messages)
+    logging.debug(message)
 
 def get_shell_command_tool(commands: list[str]) -> dict:
     """

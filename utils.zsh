@@ -291,3 +291,27 @@ kollzsh-start-vllm() {
 kollzsh-stop-vllm() {
     pkill -f "vllm serve" && echo "✅ vLLM server stopped" || echo "No vLLM server found"
 }
+
+# Function to check if Claude Code backend is available
+check_claude_server() {
+    local server_url="${KOLLZSH_CLAUDE_BASE_URL:-}"
+
+    # No custom base URL = using Anthropic API directly, just check claude CLI exists
+    if [[ -z "$server_url" ]]; then
+        return 0
+    fi
+
+    # Custom base URL configured — check if the local server is responding
+    if curl -s --connect-timeout 2 "${server_url}/v1/models" &> /dev/null; then
+        return 0
+    fi
+
+    echo "🚨 Local model server not running at ${server_url}!"
+    echo ""
+    echo "Start the server and load model: ${KOLLZSH_CLAUDE_MODEL}"
+    echo ""
+    echo "Or switch to Anthropic API directly:"
+    echo "  export KOLLZSH_CLAUDE_BASE_URL=''"
+    echo "  export KOLLZSH_CLAUDE_MODEL=sonnet"
+    return 1
+}
