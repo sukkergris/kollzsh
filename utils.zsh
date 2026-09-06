@@ -60,23 +60,10 @@ check_command() {
 
 # Function to check if Ollama is running
 check_ollama_running() {
-    local os=$(detect_os)
-    case "$os" in
-        "linux"|"mac")
-            if ! pgrep -f ollama &> /dev/null; then
-                if [ "$os" = "mac" ]; then
-                    echo "🚨 Ollama server not running! Start it with: brew services start ollama"
-                else
-                    echo "🚨 Ollama server not running! Start it with: sudo systemctl start ollama"
-                fi
-                return 1
-            fi
-            ;;
-        *)
-            echo "🚨 Unsupported operating system for Ollama"
-            return 1
-            ;;
-    esac
+    if ! curl -sf "${KOLLZSH_URL:-http://localhost:11434}" | grep -q "Ollama is running"; then
+        echo "🚨 Ollama server not running at ${KOLLZSH_URL:-http://localhost:11434}!"
+        return 1
+    fi
     return 0
 }
 

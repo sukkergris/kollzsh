@@ -41,6 +41,14 @@ export KOLLZSH_VLLM_SERVER_URL KOLLZSH_VLLM_MODEL
 export KOLLZSH_CLAUDE_MODEL KOLLZSH_CLAUDE_BASE_URL KOLLZSH_CLAUDE_AUTH_TOKEN
 export KOLLZSH_CODEX_MODEL
 
+# Use venv Python if available, otherwise fall back to system python3
+_KOLLZSH_VENV="${0:A:h}/.venv/bin/python3"
+if [[ -x "$_KOLLZSH_VENV" ]]; then
+  KOLLZSH_PYTHON="$_KOLLZSH_VENV"
+else
+  KOLLZSH_PYTHON="python3"
+fi
+
 # Path to the Rust binary (built with `cargo build --release`)
 KOLLZSH_BIN="${0:A:h}/target/release/kollzsh"
 
@@ -376,13 +384,13 @@ fzf_kollzsh() {
   else
     # Fall back to Python scripts
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     else
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd python3 "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     fi
   fi
@@ -500,11 +508,11 @@ _kollzsh_get_commands() {
     fi
   else
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/llamacpp_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/llamacpp_util.py" "$user_query")
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/vllm_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/vllm_util.py" "$user_query")
     else
-      commands=$(_kollzsh_capture_cmd python3 "$plugin_dir/ollama_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/ollama_util.py" "$user_query")
     fi
   fi
   local backend_status=$?
