@@ -390,13 +390,13 @@ fzf_kollzsh() {
   else
     # Fall back to Python scripts
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$PLUGIN_DIR/llamacpp_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$PLUGIN_DIR/vllm_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     else
-      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
+      KOLLZSH_COMMANDS=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$PLUGIN_DIR/ollama_util.py" "$KOLLZSH_USER_QUERY")
       cmd_status=$?
     fi
   fi
@@ -519,11 +519,11 @@ _kollzsh_get_commands() {
     fi
   else
     if [[ "${KOLLZSH_PLATFORM:l}" == "llamacpp" ]]; then
-      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/llamacpp_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$plugin_dir/llamacpp_util.py" "$user_query")
     elif [[ "${KOLLZSH_PLATFORM:l}" == "vllm" ]]; then
-      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/vllm_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$plugin_dir/vllm_util.py" "$user_query")
     else
-      commands=$(_kollzsh_capture_cmd $KOLLZSH_PYTHON "$plugin_dir/ollama_util.py" "$user_query")
+      commands=$(_kollzsh_capture_cmd "$KOLLZSH_PYTHON" "$plugin_dir/ollama_util.py" "$user_query")
     fi
   fi
   local backend_status=$?
