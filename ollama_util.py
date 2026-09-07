@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 import sys
 import json
+import re
+import ast
 from ollama import Client
 import platform
 import os
@@ -24,13 +26,12 @@ def log_debug(*messages):
 
 def get_shell_command_tool(commands: list[str]) -> dict:
     """
-    Generate shell command tool specification for Ollama
+    Return a list of complete, ready-to-run shell commands for the user's task.
+    Each entry must be a full command with all required arguments and flags —
+    never just a command name. Example: 'echo "Hello World"', not 'echo'.
 
     Args:
-        commands: List of shell commands to be executed
-
-    Returns:
-        dict: Tool specification containing name, description, and parameters
+        commands: Complete shell commands, e.g. ['echo "Hello World"', 'printf "Hello World\\n"']
     """
     log_debug("Generating tool specification for commands:", commands)
     return commands
@@ -43,8 +44,11 @@ def interact_with_ollama(user_query):
     
     log_debug("Sending query:", user_query)
     
-    # Format the user query to focus on shell commands
-    formatted_query = f"Generate shell commands for the following task: {user_query}. Provide multiple relevant commands if available."
+    formatted_query = (
+        f"List complete, ready-to-run {platform.system()} shell commands for: {user_query}\n"
+        "Rules: one command per line, no explanations, no numbering, no markdown, no JSON. "
+        "Every command must include all required arguments and flags."
+    )
     
     try:
         # Check if we're using OpenAI API
@@ -148,8 +152,8 @@ def interact_with_ollama(user_query):
                     log_debug("No tool calls found, falling back to content parsing")
                     return parse_commands(content)
         
-        else:  # Use Ollama API
-            client = Client(host=base_url)
+        else:  # Use Ollama API (plain text — tool calls produce unreliable JSON with small models)
+            client = Client(host=base_url, timeout=120)
             response = client.chat(
                 model=model,
                 messages=[{
@@ -157,25 +161,13 @@ def interact_with_ollama(user_query):
                     "content": formatted_query
                 }],
                 stream=False,
-                tools=[get_shell_command_tool]
+                think=False,
             )
             log_debug("Received response from Ollama:", response)
-            
-            if hasattr(response.message, 'tool_calls') and response.message.tool_calls:
-                for tool_call in response.message.tool_calls:
-                    if tool_call.function.name == 'get_shell_command_tool':
-                        try:
-                            commands = tool_call.function.arguments.get('commands', [])
-                            if commands:
-                                log_debug("Successfully extracted commands:", commands)
-                                return commands
-                        except AttributeError as e:
-                            log_debug(f"Error accessing tool call arguments: {str(e)}")
-            
-            # Fallback to parsing content if no tool calls
+
             content = response.message.content if hasattr(response.message, 'content') else ''
             if content:
-                log_debug("No tool calls found, falling back to content parsing")
+                log_debug("Parsing plain-text response from Ollama")
                 return parse_commands(content)
         
         log_debug("No valid commands found in response")
@@ -186,65 +178,52 @@ def interact_with_ollama(user_query):
         return []
 
 def parse_commands(content):
-    """Parse commands from response content."""
-    try:
-        # Try to find markdown-wrapped JSON first
-        import re
-        markdown_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
-        if markdown_match:
-            content = markdown_match.group(1)
-        
-        # Clean and normalize the content
-        content = normalize_json_string(content)
-        log_debug("Normalized content:", content)
-        
-        # Try parsing as JSON
-        try:
-            commands = json.loads(content)
-        except json.JSONDecodeError:
-            # Try Python's ast as fallback
-            import ast
-            commands = ast.literal_eval(content)
-        
-        # Ensure we have a list of commands
-        if isinstance(commands, list):
-            # Clean up commands
-            cleaned_commands = []
-            for cmd in commands:
-                if isinstance(cmd, str):
-                    # Clean up escaping but preserve shell escapes
-                    cmd = cmd.replace('\\"', '"')  # Unescape quotes
-                    cmd = cmd.replace('\\\\', '\\')  # Fix double escapes
-                    cmd = cmd.replace('"', '\\"')  # Re-escape quotes for shell
-                    cleaned_commands.append(cmd)
-            
-            log_debug("Successfully parsed commands:", cleaned_commands)
-            return cleaned_commands
-            
-        log_debug("Parsed content is not a list:", commands)
-        return []
-        
-    except Exception as e:
-        log_debug(f"Error parsing commands: {str(e)}", content)
+    """Resiliently extract a list of shell commands from text or JSON."""
+    if not isinstance(content, str):
         return []
 
-def normalize_json_string(content):
-    """Normalize JSON string by handling escapes and newlines."""
-    # Handle control characters
-    content = content.replace('\n', ' ')
-    content = content.replace('\r', ' ')
-    content = content.replace('\t', ' ')
-    
-    # Handle escaped characters
-    content = content.replace('\\"', '"')  # Temporarily unescape quotes
-    content = content.replace('\\\\', '\\')  # Fix double escapes
-    content = content.replace('"', '\\"')  # Re-escape all quotes
-    
-    # Clean up whitespace
-    content = ' '.join(content.split())
-    
-    log_debug("Normalized JSON string:", content)
-    return content
+    # Strip markdown code fences
+    m = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', content, re.DOTALL)
+    if m:
+        content = m.group(1)
+
+    content = content.strip()
+
+    # Try standard JSON
+    try:
+        result = json.loads(content)
+        if isinstance(result, list):
+            return [str(c) for c in result if str(c).strip()]
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try Python literal (handles single-quoted lists some models emit)
+    try:
+        result = ast.literal_eval(content)
+        if isinstance(result, list):
+            return [str(c) for c in result if str(c).strip()]
+    except Exception:
+        pass
+
+    # Only try regex string extraction if content looks like a JSON structure
+    if content.lstrip().startswith('[') or content.lstrip().startswith('{'):
+        matches = re.findall(r'"((?:[^"\\]|\\.)*)"', content)
+        if matches:
+            cleaned = []
+            for m in matches:
+                cmd = m.replace('\\"', '"').replace('\\\\', '\\').strip().strip('"\'')
+                if cmd:
+                    cleaned.append(cmd)
+            if cleaned:
+                return cleaned
+
+    # Plain-text fallback: one command per line, strip list markers and code fences
+    lines = [re.sub(r'^(\d+\.|\*|-)\s*', '', l.strip()) for l in content.splitlines()]
+    return [l for l in lines
+            if len(l) > 1
+            and re.match(r'^[a-z0-9/.$~_\-]', l)   # commands start lowercase/path, not prose
+            and not l.startswith('```')
+            and '<<' not in l]
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
@@ -258,8 +237,10 @@ if __name__ == '__main__':
         log_debug("No valid commands found")
         sys.exit(1)
         
-    # Print each command on a new line
+    seen = set()
     for cmd in commands:
-        print(cmd)
+        if '\n' not in cmd and cmd not in seen:
+            seen.add(cmd)
+            print(cmd)
         
     log_debug("Successfully output commands")
