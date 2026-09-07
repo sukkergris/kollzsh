@@ -413,7 +413,7 @@ fzf_kollzsh() {
   tput cuu 1 # cleanup waiting message
 
   # Use echo to pipe the commands to fzf
-  KOLLZSH_SELECTED=$(echo "$KOLLZSH_COMMANDS" | fzf --ansi --height=~10 --cycle)
+  KOLLZSH_SELECTED=$(print -r -- "$KOLLZSH_COMMANDS" | fzf --ansi --height=~10 --cycle)
   if [ -n "$KOLLZSH_SELECTED" ]; then
     BUFFER="$KOLLZSH_SELECTED"
     CURSOR=${#BUFFER}  # Move cursor to end of buffer
@@ -618,7 +618,7 @@ kollzsh_repl() {
 
     # Show commands with fzf
     local selected
-    selected=$(echo "$commands" | fzf --ansi --height=~15 --cycle \
+    selected=$(print -r -- "$commands" | fzf --ansi --height=~15 --cycle \
       --header="Select a command (Enter to choose, Esc to cancel)" \
       --preview="echo 'Command preview:'; echo {}; echo; echo 'Press Enter to select, then choose to run or edit'" \
       --preview-window=down:3:wrap)
