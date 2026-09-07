@@ -344,6 +344,12 @@ fzf_kollzsh() {
   fi
 
   KOLLZSH_USER_QUERY=$BUFFER
+
+  if [[ -z "${KOLLZSH_USER_QUERY//[[:space:]]}" ]]; then
+    zle -M "kollzsh: type a request first, then press the shortcut"
+    return 1
+  fi
+
   log_debug "User query:" "$KOLLZSH_USER_QUERY"
 
   zle end-of-line
@@ -441,6 +447,11 @@ fzf_kollzsh_thinking() {
   fi
 
   KOLLZSH_USER_QUERY=$BUFFER
+
+  if [[ -z "${KOLLZSH_USER_QUERY//[[:space:]]}" ]]; then
+    zle -M "kollzsh: type a request first, then press the shortcut"
+    return 1
+  fi
 
   zle end-of-line
   zle reset-prompt
@@ -735,7 +746,7 @@ fzf_kollzsh_repl() {
 kollzsh_claude_agent() {
   local user_query="$BUFFER"
 
-  if [[ -z "$user_query" ]]; then
+  if [[ -z "${user_query//[[:space:]]}" ]]; then
     zle -M "kollzsh: type a prompt first, then press Ctrl-l"
     return 1
   fi
@@ -807,7 +818,7 @@ kollzsh_claude_agent() {
 kollzsh_claude_sonnet() {
   local user_query="$BUFFER"
 
-  if [[ -z "$user_query" ]]; then
+  if [[ -z "${user_query//[[:space:]]}" ]]; then
     zle -M "kollzsh: type a prompt first, then press Ctrl-\\"
     return 1
   fi
